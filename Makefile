@@ -25,7 +25,7 @@ override CFLAGS += -D_FILE_OFFSET_BITS=64
 override CFLAGS += -D_XOPEN_SOURCE=700
 override CFLAGS += -DLFS_MIGRATE
 
-override LFLAGS += -lfuse
+override LFLAGS += -lfuse3
 
 ifeq ($(OS), FreeBSD)
 override CFLAGS += -I /usr/local/include

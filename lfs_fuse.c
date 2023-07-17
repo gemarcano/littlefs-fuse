@@ -5,14 +5,14 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#define FUSE_USE_VERSION 26
+#define FUSE_USE_VERSION 35
 
 #ifdef linux
 // needed for a few things fuse depends on
 #define _XOPEN_SOURCE 700
 #endif
 
-#include <fuse/fuse.h>
+#include <fuse3/fuse.h>
 #include "lfs.h"
 #include "lfs_util.h"
 #include "lfs_fuse_bd.h"
@@ -60,12 +60,11 @@ void lfs_fuse_defaults(struct lfs_config *config) {
     }
 }
 
-void *lfs_fuse_init(struct fuse_conn_info *conn) {
+void *lfs_fuse_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
+    (void)cfg;
+
     // set that we want to take care of O_TRUNC
     conn->want |= FUSE_CAP_ATOMIC_O_TRUNC;
-
-    // we also support writes of any size
-    conn->want |= FUSE_CAP_BIG_WRITES;
 
     return 0;
 }
@@ -144,7 +143,9 @@ static void lfs_fuse_tostat(struct stat *s, struct lfs_info *info) {
     }
 }
 
-int lfs_fuse_getattr(const char *path, struct stat *s) {
+int lfs_fuse_getattr(const char *path, struct stat *s,
+             struct fuse_file_info *fi) {
+    (void)fi;
     struct lfs_info info;
     int err = lfs_stat(&lfs, path, &info);
     if (err) {
@@ -188,8 +189,10 @@ int lfs_fuse_releasedir(const char *path, struct fuse_file_info *fi) {
 
 int lfs_fuse_readdir(const char *path, void *buf,
         fuse_fill_dir_t filler, off_t offset,
-        struct fuse_file_info *fi) {
-    
+        struct fuse_file_info *fi, enum fuse_readdir_flags flags) {
+
+    (void)flags;
+
     lfs_dir_t *dir = (lfs_dir_t*)fi->fh;
     struct stat s;
     struct lfs_info info;
@@ -201,11 +204,13 @@ int lfs_fuse_readdir(const char *path, void *buf,
         }
 
         lfs_fuse_tostat(&s, &info);
-        filler(buf, info.name, &s, 0);
+        filler(buf, info.name, &s, 0, 0);
     }
 }
 
-int lfs_fuse_rename(const char *from, const char *to) {
+int lfs_fuse_rename(const char *from, const char *to, unsigned int flags) {
+    if (flags)
+        return -EINVAL;
     return lfs_rename(&lfs, from, to);
 }
 
@@ -242,18 +247,6 @@ int lfs_fuse_release(const char *path, struct fuse_file_info *fi) {
     int err = lfs_file_close(&lfs, file);
     free(file);
     return err;
-}
-
-int lfs_fuse_fgetattr(const char *path, struct stat *s,
-        struct fuse_file_info *fi) {
-    lfs_file_t *file = (lfs_file_t*)fi->fh;
-
-    lfs_fuse_tostat(s, &(struct lfs_info){
-        .size = lfs_file_size(&lfs, file),
-        .type = LFS_TYPE_REG,
-    });
-
-    return 0;
 }
 
 int lfs_fuse_read(const char *path, char *buf, size_t size,
@@ -310,7 +303,9 @@ int lfs_fuse_ftruncate(const char *path, off_t size,
     return lfs_file_truncate(&lfs, file, size);
 }
 
-int lfs_fuse_truncate(const char *path, off_t size) {
+int lfs_fuse_truncate(const char *path, off_t size,
+    struct fuse_file_info *fi) {
+    (void) fi;
     lfs_file_t file;
     int err = lfs_file_open(&lfs, &file, path, LFS_O_WRONLY);
     if (err) {
@@ -336,17 +331,20 @@ int lfs_fuse_mknod(const char *path, mode_t mode, dev_t dev) {
     return -EPERM;
 }
 
-int lfs_fuse_chmod(const char *path, mode_t mode) {
+int lfs_fuse_chmod(const char *path, mode_t mode,
+    struct fuse_file_info *fi) {
     // not supported, always succeed
     return 0;
 }
 
-int lfs_fuse_chown(const char *path, uid_t uid, gid_t gid) {
+int lfs_fuse_chown(const char *path, uid_t uid, gid_t gid,
+    struct fuse_file_info *fi) {
     // not supported, fail
     return -EPERM;
 }
 
-int lfs_fuse_utimens(const char *path, const struct timespec ts[2]) {
+int lfs_fuse_utimens(const char *path, const struct timespec ts[2],
+    struct fuse_file_info *fi) {
     // not supported, always succeed
     return 0;
 }
@@ -372,7 +370,6 @@ static struct fuse_operations lfs_fuse_ops = {
     .create     = lfs_fuse_create,
     .truncate   = lfs_fuse_truncate,
     .release    = lfs_fuse_release,
-    .fgetattr   = lfs_fuse_fgetattr,
     .read       = lfs_fuse_read,
     .write      = lfs_fuse_write,
     .fsync      = lfs_fuse_fsync,
@@ -459,13 +456,13 @@ int lfs_fuse_opt_proc(void *data, const char *arg,
         case KEY_MIGRATE:
             migrate = true;
             return 0;
-            
+
         case KEY_HELP:
             fprintf(stderr, help_text, args->argv[0]);
             fuse_opt_add_arg(args, "-ho");
             fuse_main(args->argc, args->argv, &lfs_fuse_ops, NULL);
             exit(1);
-            
+
         case KEY_VERSION:
             fprintf(stderr, "littlefs version: v%d.%d\n",
                  LFS_VERSION_MAJOR, LFS_VERSION_MINOR);
